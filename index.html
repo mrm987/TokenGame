@@ -128,8 +128,11 @@
     <div class="section">
         <h3>📊 게임 상태</h3>
         <div>턴: <span id="turn">1</span></div>
-        <div>추론 풀: <span id="reasoning-pool">12</span> / 12</div>
-        <div>🛡️ 방어력: <span id="player-shield">0</span></div>
+        <div>
+            ❤️ 체력: <span id="player-hp">30</span> / 30 |
+            🛡️ 방어력: <span id="player-shield">0</span>
+        </div>
+        <div>추론 풀: <span id="reasoning-pool">5</span> / 5</div>
         <div>덱: <span id="deck-count">20</span>장 | 버린 덱: <span id="discard-count">0</span>장</div>
     </div>
 
@@ -146,7 +149,7 @@
         </div>
         <div>
             선택한 카드 수: <span id="selected-count">0</span> |
-            총 비용: <span id="total-cost">0</span> / 12
+            총 비용: <span id="total-cost">0</span> / 5
         </div>
         <button id="execute-btn" onclick="executePrompt()" disabled>🚀 프롬프트 실행</button>
         <button onclick="clearSelection()">🔄 선택 초기화</button>
@@ -179,7 +182,8 @@
 
         let gameState = {
             turn: 1,
-            reasoningPool: 12,
+            reasoningPool: 5,
+            maxReasoningPool: 5,
             hand: [],
             library: [],
             discardPile: [],
@@ -189,7 +193,9 @@
                 { id: 2, name: '고블린', hp: 15, maxHp: 15 },
                 { id: 3, name: '오크', hp: 20, maxHp: 20 }
             ],
-            playerShield: 0  // 플레이어 방어력
+            playerHp: 30,
+            maxPlayerHp: 30,
+            playerShield: 0
         };
 
         // ========== 초기화 ==========
@@ -258,6 +264,7 @@
             // 상태 표시
             document.getElementById('turn').textContent = gameState.turn;
             document.getElementById('reasoning-pool').textContent = gameState.reasoningPool;
+            document.getElementById('player-hp').textContent = gameState.playerHp;
             document.getElementById('player-shield').textContent = gameState.playerShield;
             document.getElementById('deck-count').textContent = gameState.library.length;
             document.getElementById('discard-count').textContent = gameState.discardPile.length;
@@ -335,9 +342,9 @@
                 // 과추론 (Surge)
                 resultType = 'surge';
                 resultText = `🔥 SURGE! (남은 추론: ${diff})`;
-                resultText += `<br>→ 보너스: 피해 +30%`;
+                resultText += `<br>→ 보너스: 효과 +50%`;
                 usedTokens = selectedArray;
-                damageBonus = 1.3;
+                damageBonus = 1.5;
             } else if (diff === 0) {
                 // 완전 추론 (Perfect)
                 resultType = 'perfect';
@@ -699,7 +706,7 @@
             // 4. 선택 초기화 및 다음 턴
             gameState.selectedCards.clear();
             gameState.turn++;
-            gameState.reasoningPool = 12; // 추론 풀 리셋
+            gameState.reasoningPool = gameState.maxReasoningPool; // 추론 풀 리셋
 
             updateUI();
             log(`--- 턴 ${gameState.turn} 시작 ---`);
