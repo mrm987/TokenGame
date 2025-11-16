@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>토큰 게임 - 핵심 컨셉 프로토타입</title>
+    <style>
+        body {
+            font-family: monospace;
+            max-width: 1000px;
+            margin: 20px auto;
+            padding: 20px;
+            background: #1a1a1a;
+            color: #eee;
+        }
+        .section {
+            margin: 20px 0;
+            padding: 15px;
+            border: 2px solid #444;
+            background: #252525;
+        }
+        .card {
+            display: inline-block;
+            padding: 10px;
+            margin: 5px;
+            border: 2px solid #666;
+            background: #333;
+            cursor: pointer;
+            min-width: 120px;
+        }
+        .card.selected {
+            border-color: #4a9eff;
+            background: #1a3a5a;
+        }
+        .card.grade-A {
+            border-left: 4px solid #4a9eff;
+        }
+        .card.grade-C {
+            border-left: 4px solid #ff9a4a;
+        }
+        .card-text {
+            font-size: 14px;
+        }
+        .card-cost {
+            font-size: 11px;
+            color: #aaa;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            background: #444;
+            color: #eee;
+            border: 2px solid #666;
+            cursor: pointer;
+            font-family: monospace;
+        }
+        button:hover {
+            background: #555;
+        }
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .result {
+            padding: 10px;
+            margin: 10px 0;
+            background: #1a1a1a;
+            border-left: 4px solid #666;
+        }
+        .result.surge { border-left-color: #ff4a4a; }
+        .result.perfect { border-left-color: #4aff4a; }
+        .result.cut { border-left-color: #ffaa4a; }
+        .log {
+            font-size: 12px;
+            color: #999;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <h1>🎮 토큰 게임 - 컨셉 검증 프로토타입</h1>
+
+    <div class="section">
+        <h3>📊 게임 상태</h3>
+        <div>턴: <span id="turn">1</span></div>
+        <div>추론 풀: <span id="reasoning-pool">12</span> / 12</div>
+        <div>덱: <span id="deck-count">20</span>장 | 버린 덱: <span id="discard-count">0</span>장</div>
+    </div>
+
+    <div class="section">
+        <h3>🖐️ 액티브 핸드 (5장 고정)</h3>
+        <div id="hand"></div>
+        <p style="font-size: 12px; color: #999;">클릭해서 카드 선택/해제</p>
+    </div>
+
+    <div class="section">
+        <h3>📝 조립된 프롬프트</h3>
+        <div id="prompt">
+            <p style="color: #666;">카드를 선택하세요...</p>
+        </div>
+        <div>
+            선택한 카드 수: <span id="selected-count">0</span> |
+            총 비용: <span id="total-cost">0</span> / 12
+        </div>
+        <button id="execute-btn" onclick="executePrompt()" disabled>🚀 프롬프트 실행</button>
+        <button onclick="clearSelection()">🔄 선택 초기화</button>
+    </div>
+
+    <div class="section">
+        <h3>⚡ 추론 결과</h3>
+        <div id="result">
+            <p style="color: #666;">프롬프트를 실행하세요...</p>
+        </div>
+    </div>
+
+    <div class="section">
+        <h3>📜 게임 로그</h3>
+        <div id="log" class="log"></div>
+    </div>
+
+    <script>
+        // ========== 데이터 구조 ==========
+        const CARD_POOL = [
+            { id: 1, grade: 'A', type: 'target', text: '적 1체', cost: 1 },
+            { id: 2, grade: 'A', type: 'action', text: '피해 3', cost: 2 },
+            { id: 3, grade: 'A', type: 'action', text: '방어 5', cost: 2 },
+            { id: 4, grade: 'A', type: 'target', text: '적 전체', cost: 3 },
+            { id: 5, grade: 'C', type: 'target', text: '모두에게', cost: 3 },
+            { id: 6, grade: 'C', type: 'modifier', text: '뜨거움', cost: 2 },
+            { id: 7, grade: 'A', type: 'action', text: '피해 2', cost: 1 },
+            { id: 8, grade: 'A', type: 'modifier', text: '빠르게', cost: 1 },
+        ];
+
+        let gameState = {
+            turn: 1,
+            reasoningPool: 12,
+            hand: [],
+            library: [],
+            discardPile: [],
+            selectedCards: new Set()
+        };
+
+        // ========== 초기화 ==========
+        function initGame() {
+            // 덱 생성 (카드 풀을 여러 번 복사)
+            gameState.library = [];
+            for (let i = 0; i < 3; i++) {
+                CARD_POOL.forEach(card => {
+                    gameState.library.push({ ...card, uniqueId: `${card.id}-${i}` });
+                });
+            }
+            shuffle(gameState.library);
+
+            // 초기 핸드 5장
+            drawCards(5);
+            updateUI();
+            log('게임 시작! 핸드 5장 드로우');
+        }
+
+        function shuffle(array) {
+            for (let i = array.length - 1; i > 0; i--) {
+                const j = Math.floor(Math.random() * (i + 1));
+                [array[i], array[j]] = [array[j], array[i]];
+            }
+        }
+
+        function drawCards(count) {
+            for (let i = 0; i < count; i++) {
+                if (gameState.library.length === 0) {
+                    // 덱이 비었으면 버린 덱 셔플해서 재활용
+                    if (gameState.discardPile.length > 0) {
+                        log('⟳ 덱 소진! 버린 덱을 셔플하여 재활용');
+                        gameState.library = [...gameState.discardPile];
+                        gameState.discardPile = [];
+                        shuffle(gameState.library);
+                    } else {
+                        log('⚠️ 더 이상 뽑을 카드가 없습니다!');
+                        break;
+                    }
+                }
+
+                const card = gameState.library.shift();
+                gameState.hand.push(card);
+            }
+        }
+
+        // ========== UI 업데이트 ==========
+        function updateUI() {
+            // 상태 표시
+            document.getElementById('turn').textContent = gameState.turn;
+            document.getElementById('reasoning-pool').textContent = gameState.reasoningPool;
+            document.getElementById('deck-count').textContent = gameState.library.length;
+            document.getElementById('discard-count').textContent = gameState.discardPile.length;
+
+            // 핸드 렌더링
+            const handEl = document.getElementById('hand');
+            handEl.innerHTML = '';
+            gameState.hand.forEach(card => {
+                const cardEl = document.createElement('div');
+                cardEl.className = `card grade-${card.grade}`;
+                if (gameState.selectedCards.has(card.uniqueId)) {
+                    cardEl.classList.add('selected');
+                }
+                cardEl.innerHTML = `
+                    <div class="card-text">[${card.grade}: ${card.text}]</div>
+                    <div class="card-cost">비용: ${card.cost}</div>
+                `;
+                cardEl.onclick = () => toggleCard(card.uniqueId);
+                handEl.appendChild(cardEl);
+            });
+
+            // 프롬프트 표시
+            updatePrompt();
+        }
+
+        function toggleCard(uniqueId) {
+            if (gameState.selectedCards.has(uniqueId)) {
+                gameState.selectedCards.delete(uniqueId);
+            } else {
+                gameState.selectedCards.add(uniqueId);
+            }
+            updatePrompt();
+            updateUI();
+        }
+
+        function clearSelection() {
+            gameState.selectedCards.clear();
+            updatePrompt();
+            updateUI();
+        }
+
+        function updatePrompt() {
+            const selectedArray = gameState.hand.filter(c => gameState.selectedCards.has(c.uniqueId));
+            const totalCost = selectedArray.reduce((sum, c) => sum + c.cost, 0);
+
+            const promptEl = document.getElementById('prompt');
+            if (selectedArray.length === 0) {
+                promptEl.innerHTML = '<p style="color: #666;">카드를 선택하세요...</p>';
+            } else {
+                const text = selectedArray.map(c => `[${c.grade}: ${c.text}]`).join(' + ');
+                promptEl.innerHTML = `<p>${text}</p>`;
+            }
+
+            document.getElementById('selected-count').textContent = selectedArray.length;
+            document.getElementById('total-cost').textContent = totalCost;
+
+            // 실행 버튼 활성화
+            const executeBtn = document.getElementById('execute-btn');
+            executeBtn.disabled = selectedArray.length === 0;
+        }
+
+        // ========== 추론 시스템 ==========
+        function executePrompt() {
+            const selectedArray = gameState.hand.filter(c => gameState.selectedCards.has(c.uniqueId));
+            if (selectedArray.length === 0) return;
+
+            const totalCost = selectedArray.reduce((sum, c) => sum + c.cost, 0);
+            const diff = gameState.reasoningPool - totalCost;
+
+            let resultType, resultText, usedTokens, cutTokens = [];
+
+            if (diff > 0) {
+                // 과추론 (Surge)
+                resultType = 'surge';
+                resultText = `🔥 SURGE! (남은 추론: ${diff})`;
+                resultText += `<br>→ 보너스: 피해 +30%`;
+                usedTokens = selectedArray;
+            } else if (diff === 0) {
+                // 완전 추론 (Perfect)
+                resultType = 'perfect';
+                resultText = `✨ PERFECT! (정확히 일치)`;
+                resultText += `<br>→ 보너스: 효과 2회 발동`;
+                usedTokens = selectedArray;
+            } else {
+                // 추론 실패 (Cut)
+                resultType = 'cut';
+                const cutCount = Math.ceil(Math.abs(diff) / 2); // 간단히 2로 나눔
+                const actualCut = Math.min(cutCount, selectedArray.length);
+
+                cutTokens = selectedArray.slice(-actualCut);
+                usedTokens = selectedArray.slice(0, -actualCut);
+
+                resultText = `⚠️ CUT! (부족한 추론: ${Math.abs(diff)})`;
+                resultText += `<br>→ 뒤에서 ${actualCut}장 제거됨: `;
+                resultText += cutTokens.map(c => `[${c.text}]`).join(', ');
+            }
+
+            // 결과 표시
+            const resultEl = document.getElementById('result');
+            resultEl.innerHTML = `
+                <div class="result ${resultType}">
+                    <strong>${resultText}</strong>
+                    <br><br>
+                    <strong>실제 실행된 토큰:</strong><br>
+                    ${usedTokens.map(c => `[${c.grade}: ${c.text}] (비용 ${c.cost})`).join('<br>')}
+                    ${usedTokens.length === 0 ? '<span style="color: #999;">없음 (모두 잘렸습니다)</span>' : ''}
+                </div>
+            `;
+
+            log(`턴 ${gameState.turn}: ${resultType.toUpperCase()} - ${selectedArray.length}장 사용, 총 비용 ${totalCost}`);
+
+            // 턴 종료 처리
+            endTurn(selectedArray);
+        }
+
+        // ========== 턴 종료 ==========
+        function endTurn(usedCards) {
+            // 1. 사용한 카드 → 버린 덱
+            gameState.discardPile.push(...usedCards);
+
+            // 2. 핸드에서 사용한 카드 제거
+            gameState.hand = gameState.hand.filter(c => !gameState.selectedCards.has(c.uniqueId));
+
+            // 3. 빈 슬롯만큼 보충
+            const drawCount = 5 - gameState.hand.length;
+            log(`→ 사용한 ${usedCards.length}장은 버림, 미사용 ${gameState.hand.length}장 유지, ${drawCount}장 보충`);
+
+            drawCards(drawCount);
+
+            // 4. 선택 초기화 및 다음 턴
+            gameState.selectedCards.clear();
+            gameState.turn++;
+            gameState.reasoningPool = 12; // 추론 풀 리셋
+
+            updateUI();
+            log(`--- 턴 ${gameState.turn} 시작 ---`);
+        }
+
+        // ========== 로그 ==========
+        function log(message) {
+            const logEl = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logEl.insertBefore(entry, logEl.firstChild);
+        }
+
+        // ========== 게임 시작 ==========
+        initGame();
+    </script>
+</body>
+</html>
