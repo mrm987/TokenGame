@@ -76,10 +76,54 @@
             max-height: 200px;
             overflow-y: auto;
         }
+        .enemy {
+            display: inline-block;
+            margin: 10px;
+            padding: 15px;
+            border: 2px solid #666;
+            background: #2a2a2a;
+            min-width: 150px;
+        }
+        .enemy.dead {
+            opacity: 0.3;
+            border-color: #333;
+        }
+        .enemy-name {
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        .hp-bar {
+            width: 100%;
+            height: 20px;
+            background: #1a1a1a;
+            border: 1px solid #666;
+            margin-top: 5px;
+            position: relative;
+        }
+        .hp-fill {
+            height: 100%;
+            background: #ff4a4a;
+            transition: width 0.3s;
+        }
+        .hp-text {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            text-align: center;
+            line-height: 20px;
+            font-size: 11px;
+            color: #fff;
+        }
     </style>
 </head>
 <body>
     <h1>🎮 토큰 게임 - 컨셉 검증 프로토타입</h1>
+
+    <div class="section">
+        <h3>👾 적 (ENEMIES)</h3>
+        <div id="enemies"></div>
+    </div>
 
     <div class="section">
         <h3>📊 게임 상태</h3>
@@ -138,7 +182,12 @@
             hand: [],
             library: [],
             discardPile: [],
-            selectedCards: new Set()
+            selectedCards: new Set(),
+            enemies: [
+                { id: 1, name: '슬라임', hp: 10, maxHp: 10 },
+                { id: 2, name: '고블린', hp: 15, maxHp: 15 },
+                { id: 3, name: '오크', hp: 20, maxHp: 20 }
+            ]
         };
 
         // ========== 초기화 ==========
@@ -187,6 +236,23 @@
 
         // ========== UI 업데이트 ==========
         function updateUI() {
+            // 적 렌더링
+            const enemiesEl = document.getElementById('enemies');
+            enemiesEl.innerHTML = '';
+            gameState.enemies.forEach(enemy => {
+                const enemyEl = document.createElement('div');
+                enemyEl.className = `enemy ${enemy.hp <= 0 ? 'dead' : ''}`;
+                const hpPercent = (enemy.hp / enemy.maxHp) * 100;
+                enemyEl.innerHTML = `
+                    <div class="enemy-name">${enemy.name}</div>
+                    <div class="hp-bar">
+                        <div class="hp-fill" style="width: ${hpPercent}%"></div>
+                        <div class="hp-text">${Math.max(0, enemy.hp)} / ${enemy.maxHp}</div>
+                    </div>
+                `;
+                enemiesEl.appendChild(enemyEl);
+            });
+
             // 상태 표시
             document.getElementById('turn').textContent = gameState.turn;
             document.getElementById('reasoning-pool').textContent = gameState.reasoningPool;
@@ -259,6 +325,8 @@
             const diff = gameState.reasoningPool - totalCost;
 
             let resultType, resultText, usedTokens, cutTokens = [];
+            let damageBonus = 1.0;
+            let repeatCount = 1;
 
             if (diff > 0) {
                 // 과추론 (Surge)
@@ -266,12 +334,14 @@
                 resultText = `🔥 SURGE! (남은 추론: ${diff})`;
                 resultText += `<br>→ 보너스: 피해 +30%`;
                 usedTokens = selectedArray;
+                damageBonus = 1.3;
             } else if (diff === 0) {
                 // 완전 추론 (Perfect)
                 resultType = 'perfect';
                 resultText = `✨ PERFECT! (정확히 일치)`;
                 resultText += `<br>→ 보너스: 효과 2회 발동`;
                 usedTokens = selectedArray;
+                repeatCount = 2;
             } else {
                 // 추론 실패 (Cut)
                 resultType = 'cut';
@@ -285,6 +355,10 @@
                 resultText += `<br>→ 뒤에서 ${actualCut}장 제거됨: `;
                 resultText += cutTokens.map(c => `[${c.text}]`).join(', ');
             }
+
+            // 전투 로직 실행
+            const combatResult = executeCombat(usedTokens, damageBonus, repeatCount);
+            resultText += '<br><br>' + combatResult;
 
             // 결과 표시
             const resultEl = document.getElementById('result');
@@ -300,8 +374,83 @@
 
             log(`턴 ${gameState.turn}: ${resultType.toUpperCase()} - ${selectedArray.length}장 사용, 총 비용 ${totalCost}`);
 
+            // UI 업데이트 (적 체력 반영)
+            updateUI();
+
             // 턴 종료 처리
             endTurn(selectedArray);
+        }
+
+        // ========== 전투 로직 ==========
+        function executeCombat(tokens, damageBonus, repeatCount) {
+            let combatLog = '<strong>⚔️ 전투 결과:</strong><br>';
+
+            // 토큰에서 타겟과 액션 분석
+            const hasTarget = tokens.some(t => t.type === 'target');
+            const damageCards = tokens.filter(t => t.text.includes('피해'));
+
+            if (damageCards.length === 0) {
+                combatLog += '<span style="color: #999;">피해를 주는 카드가 없습니다.</span>';
+                return combatLog;
+            }
+
+            // 기본 피해 계산
+            let baseDamage = 0;
+            damageCards.forEach(card => {
+                const match = card.text.match(/피해\s*(\d+)/);
+                if (match) {
+                    baseDamage += parseInt(match[1]);
+                }
+            });
+
+            // 타겟 결정
+            let targetType = 'single'; // 기본: 단일
+            tokens.forEach(token => {
+                if (token.text.includes('적 전체') || token.text.includes('모두')) {
+                    targetType = 'all';
+                }
+            });
+
+            // 반복 실행
+            for (let i = 0; i < repeatCount; i++) {
+                if (repeatCount > 1) {
+                    combatLog += `<br>[${i + 1}회 실행]<br>`;
+                }
+
+                if (targetType === 'all') {
+                    // 전체 공격
+                    const aliveEnemies = gameState.enemies.filter(e => e.hp > 0);
+                    aliveEnemies.forEach(enemy => {
+                        const finalDamage = Math.floor(baseDamage * damageBonus);
+                        enemy.hp -= finalDamage;
+                        combatLog += `→ ${enemy.name}에게 ${finalDamage} 피해`;
+                        if (enemy.hp <= 0) {
+                            combatLog += ` 💀 <strong>처치!</strong>`;
+                        }
+                        combatLog += '<br>';
+                    });
+                } else {
+                    // 단일 공격 (첫 번째 살아있는 적)
+                    const target = gameState.enemies.find(e => e.hp > 0);
+                    if (target) {
+                        const finalDamage = Math.floor(baseDamage * damageBonus);
+                        target.hp -= finalDamage;
+                        combatLog += `→ ${target.name}에게 ${finalDamage} 피해`;
+                        if (target.hp <= 0) {
+                            combatLog += ` 💀 <strong>처치!</strong>`;
+                        }
+                        combatLog += '<br>';
+                    }
+                }
+            }
+
+            // 승리 조건 체크
+            const allDead = gameState.enemies.every(e => e.hp <= 0);
+            if (allDead) {
+                combatLog += '<br>🎉 <strong>모든 적 처치! 승리!</strong>';
+            }
+
+            return combatLog;
         }
 
         // ========== 턴 종료 ==========
