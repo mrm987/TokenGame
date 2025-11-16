@@ -189,9 +189,9 @@
             discardPile: [],
             selectedCards: new Set(),
             enemies: [
-                { id: 1, name: '슬라임', hp: 10, maxHp: 10 },
-                { id: 2, name: '고블린', hp: 15, maxHp: 15 },
-                { id: 3, name: '오크', hp: 20, maxHp: 20 }
+                { id: 1, name: '슬라임', hp: 10, maxHp: 10, nextAction: null },
+                { id: 2, name: '고블린', hp: 15, maxHp: 15, nextAction: null },
+                { id: 3, name: '오크', hp: 20, maxHp: 20, nextAction: null }
             ],
             playerHp: 30,
             maxPlayerHp: 30,
@@ -211,8 +211,34 @@
 
             // 초기 핸드 5장
             drawCards(5);
+
+            // 적들의 다음 행동 결정
+            gameState.enemies.forEach(enemy => {
+                planEnemyAction(enemy);
+            });
+
             updateUI();
             log('게임 시작! 핸드 5장 드로우');
+        }
+
+        // ========== 적 행동 계획 ==========
+        function planEnemyAction(enemy) {
+            if (enemy.hp <= 0) {
+                enemy.nextAction = null;
+                return;
+            }
+
+            // 적 종류에 따라 다른 공격 패턴
+            let damage = 0;
+            if (enemy.name === '슬라임') {
+                damage = Math.random() < 0.5 ? 2 : 3;
+            } else if (enemy.name === '고블린') {
+                damage = Math.random() < 0.5 ? 3 : 4;
+            } else if (enemy.name === '오크') {
+                damage = Math.random() < 0.5 ? 5 : 6;
+            }
+
+            enemy.nextAction = { type: 'attack', damage: damage };
         }
 
         function shuffle(array) {
@@ -251,12 +277,21 @@
                 const enemyEl = document.createElement('div');
                 enemyEl.className = `enemy ${enemy.hp <= 0 ? 'dead' : ''}`;
                 const hpPercent = (enemy.hp / enemy.maxHp) * 100;
+
+                let actionText = '';
+                if (enemy.hp > 0 && enemy.nextAction) {
+                    if (enemy.nextAction.type === 'attack') {
+                        actionText = `<div style="color: #ff9a4a; font-size: 12px; margin-top: 5px;">⚔️ 공격 예정: ${enemy.nextAction.damage} 피해</div>`;
+                    }
+                }
+
                 enemyEl.innerHTML = `
                     <div class="enemy-name">${enemy.name}</div>
                     <div class="hp-bar">
                         <div class="hp-fill" style="width: ${hpPercent}%"></div>
                         <div class="hp-text">${Math.max(0, enemy.hp)} / ${enemy.maxHp}</div>
                     </div>
+                    ${actionText}
                 `;
                 enemiesEl.appendChild(enemyEl);
             });
@@ -711,18 +746,74 @@
             return combatLog;
         }
 
+        // ========== 적 턴 실행 ==========
+        function executeEnemyTurn() {
+            let enemyLog = '<br><strong>🎯 적 턴:</strong><br>';
+            let anyAction = false;
+
+            gameState.enemies.forEach(enemy => {
+                if (enemy.hp <= 0 || !enemy.nextAction) return;
+
+                anyAction = true;
+
+                if (enemy.nextAction.type === 'attack') {
+                    let damage = enemy.nextAction.damage;
+
+                    // 방어력으로 피해 감소
+                    if (gameState.playerShield > 0) {
+                        const blocked = Math.min(damage, gameState.playerShield);
+                        gameState.playerShield -= blocked;
+                        damage -= blocked;
+
+                        enemyLog += `→ ${enemy.name}의 공격! (${enemy.nextAction.damage} 피해)`;
+                        if (blocked > 0) {
+                            enemyLog += ` → 방어력 ${blocked} 소모`;
+                        }
+                        if (damage > 0) {
+                            gameState.playerHp -= damage;
+                            enemyLog += ` → ${damage} 피해 받음!`;
+                        } else {
+                            enemyLog += ` → 완전히 방어!`;
+                        }
+                        enemyLog += '<br>';
+                    } else {
+                        gameState.playerHp -= damage;
+                        enemyLog += `→ ${enemy.name}의 공격! ${damage} 피해!<br>`;
+                    }
+                }
+
+                // 다음 행동 재계획
+                planEnemyAction(enemy);
+            });
+
+            if (anyAction) {
+                const resultEl = document.getElementById('result');
+                resultEl.innerHTML += enemyLog;
+            }
+
+            // 패배 조건 체크
+            if (gameState.playerHp <= 0) {
+                const resultEl = document.getElementById('result');
+                resultEl.innerHTML += '<br>💀 <strong>플레이어 사망... 패배!</strong>';
+                log('게임 오버!');
+            }
+        }
+
         // ========== 턴 종료 ==========
         function endTurn(usedCards) {
-            // 1. 핸드 전체를 버린 덱으로
+            // 1. 적 턴 실행
+            executeEnemyTurn();
+
+            // 2. 핸드 전체를 버린 덱으로
             gameState.discardPile.push(...gameState.hand);
             gameState.hand = [];
 
-            log(`→ 핸드 전체 ${gameState.hand.length + usedCards.length}장 버림, 새로 5장 뽑기`);
+            log(`→ 핸드 전체 버림, 새로 5장 뽑기`);
 
-            // 2. 새로운 핸드 5장 드로우
+            // 3. 새로운 핸드 5장 드로우
             drawCards(5);
 
-            // 3. 선택 초기화 및 다음 턴
+            // 4. 선택 초기화 및 다음 턴
             gameState.selectedCards.clear();
             gameState.turn++;
             gameState.reasoningPool = gameState.maxReasoningPool; // 추론 풀 리셋
