@@ -356,9 +356,11 @@
                 resultText += cutTokens.map(c => `[${c.text}]`).join(', ');
             }
 
+            // 토큰 해석
+            const interpretation = interpretTokens(usedTokens);
+
             // 전투 로직 실행
             const combatResult = executeCombat(usedTokens, damageBonus, repeatCount);
-            resultText += '<br><br>' + combatResult;
 
             // 결과 표시
             const resultEl = document.getElementById('result');
@@ -366,9 +368,17 @@
                 <div class="result ${resultType}">
                     <strong>${resultText}</strong>
                     <br><br>
-                    <strong>실제 실행된 토큰:</strong><br>
-                    ${usedTokens.map(c => `[${c.grade}: ${c.text}] (비용 ${c.cost})`).join('<br>')}
-                    ${usedTokens.length === 0 ? '<span style="color: #999;">없음 (모두 잘렸습니다)</span>' : ''}
+                    ${interpretation}
+                    <br>
+                    ${combatResult}
+                    <br>
+                    <details style="margin-top: 10px;">
+                        <summary style="cursor: pointer; color: #999;">사용된 토큰 상세 (클릭)</summary>
+                        <div style="margin-top: 5px; padding: 5px; background: #1a1a1a;">
+                            ${usedTokens.map(c => `[${c.grade}: ${c.text}] (비용 ${c.cost})`).join('<br>')}
+                            ${usedTokens.length === 0 ? '<span style="color: #999;">없음 (모두 잘렸습니다)</span>' : ''}
+                        </div>
+                    </details>
                 </div>
             `;
 
@@ -379,6 +389,57 @@
 
             // 턴 종료 처리
             endTurn(selectedArray);
+        }
+
+        // ========== 토큰 해석 ==========
+        function interpretTokens(tokens) {
+            let interpretation = '<strong>📖 프롬프트 해석:</strong><br>';
+            interpretation += '<div style="background: #1a1a2a; padding: 10px; margin: 5px 0; border-left: 3px solid #4a9eff;">';
+
+            // 토큰 분석
+            const targets = tokens.filter(t => t.type === 'target');
+            const actions = tokens.filter(t => t.type === 'action');
+            const modifiers = tokens.filter(t => t.type === 'modifier');
+
+            // 타겟 해석
+            let targetText = '???';
+            if (targets.some(t => t.text.includes('적 전체') || t.text.includes('모두'))) {
+                targetText = '모든 적';
+            } else if (targets.some(t => t.text.includes('적 1체'))) {
+                targetText = '적 1체';
+            }
+
+            // 액션 해석
+            let actionParts = [];
+            actions.forEach(card => {
+                if (card.text.includes('피해')) {
+                    const match = card.text.match(/피해\s*(\d+)/);
+                    if (match) {
+                        actionParts.push(`피해 ${match[1]}`);
+                    }
+                } else if (card.text.includes('방어')) {
+                    const match = card.text.match(/방어\s*(\d+)/);
+                    if (match) {
+                        actionParts.push(`방어 ${match[1]} 획득`);
+                    }
+                }
+            });
+
+            // 수식어 해석
+            let modifierText = '';
+            if (modifiers.length > 0) {
+                modifierText = ' (' + modifiers.map(m => m.text).join(', ') + ')';
+            }
+
+            // 최종 문장 조합
+            if (actionParts.length > 0) {
+                interpretation += `"<strong>${targetText}</strong>에게 <strong>${actionParts.join(' + ')}</strong>${modifierText}"`;
+            } else {
+                interpretation += '<span style="color: #999;">실행 가능한 액션이 없습니다.</span>';
+            }
+
+            interpretation += '</div>';
+            return interpretation;
         }
 
         // ========== 전투 로직 ==========
@@ -410,6 +471,15 @@
                     targetType = 'all';
                 }
             });
+
+            // 보너스 설명
+            if (damageBonus > 1.0) {
+                combatLog += `<span style="color: #ff9a4a;">기본 피해 ${baseDamage} → Surge 보너스 적용 → ${Math.floor(baseDamage * damageBonus)} 피해</span><br>`;
+            } else if (repeatCount > 1) {
+                combatLog += `<span style="color: #4aff9a;">Perfect! 피해 ${baseDamage}를 ${repeatCount}회 실행</span><br>`;
+            } else {
+                combatLog += `<span style="color: #aaa;">피해: ${baseDamage}</span><br>`;
+            }
 
             // 반복 실행
             for (let i = 0; i < repeatCount; i++) {
