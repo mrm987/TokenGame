@@ -129,6 +129,7 @@
         <h3>📊 게임 상태</h3>
         <div>턴: <span id="turn">1</span></div>
         <div>추론 풀: <span id="reasoning-pool">12</span> / 12</div>
+        <div>🛡️ 방어력: <span id="player-shield">0</span></div>
         <div>덱: <span id="deck-count">20</span>장 | 버린 덱: <span id="discard-count">0</span>장</div>
     </div>
 
@@ -187,7 +188,8 @@
                 { id: 1, name: '슬라임', hp: 10, maxHp: 10 },
                 { id: 2, name: '고블린', hp: 15, maxHp: 15 },
                 { id: 3, name: '오크', hp: 20, maxHp: 20 }
-            ]
+            ],
+            playerShield: 0  // 플레이어 방어력
         };
 
         // ========== 초기화 ==========
@@ -256,6 +258,7 @@
             // 상태 표시
             document.getElementById('turn').textContent = gameState.turn;
             document.getElementById('reasoning-pool').textContent = gameState.reasoningPool;
+            document.getElementById('player-shield').textContent = gameState.playerShield;
             document.getElementById('deck-count').textContent = gameState.library.length;
             document.getElementById('discard-count').textContent = gameState.discardPile.length;
 
@@ -396,20 +399,82 @@
             let interpretation = '<strong>📖 프롬프트 해석:</strong><br>';
             interpretation += '<div style="background: #1a1a2a; padding: 10px; margin: 5px 0; border-left: 3px solid #4a9eff;">';
 
+            if (tokens.length === 0) {
+                interpretation += '<span style="color: #666;">추론 실패로 모든 토큰이 제거됨</span>';
+                interpretation += '</div>';
+                return interpretation;
+            }
+
             // 토큰 분석
             const targets = tokens.filter(t => t.type === 'target');
             const actions = tokens.filter(t => t.type === 'action');
             const modifiers = tokens.filter(t => t.type === 'modifier');
 
-            // 타겟 해석
-            let targetText = '???';
+            const damageActions = actions.filter(t => t.text.includes('피해'));
+            const defenseActions = actions.filter(t => t.text.includes('방어'));
+
+            // === 경우별 해석 ===
+
+            // 타겟만 있음
+            if (targets.length > 0 && actions.length === 0) {
+                const targetText = targets[0].text.includes('전체') ? '모든 적' : '적';
+                interpretation += `"<strong>${targetText}</strong>을(를) 노려본다`;
+                if (modifiers.length > 0) {
+                    interpretation += ` (<strong>${modifiers.map(m => m.text).join(', ')}</strong>)`;
+                }
+                interpretation += `" <span style="color: #999;">→ 행동 없음</span>`;
+                interpretation += '</div>';
+                return interpretation;
+            }
+
+            // 액션만 있음 (타겟 없음)
+            if (actions.length > 0 && targets.length === 0) {
+                let actionParts = [];
+
+                if (damageActions.length > 0) {
+                    damageActions.forEach(card => {
+                        const match = card.text.match(/피해\s*(\d+)/);
+                        if (match) {
+                            actionParts.push(`피해 ${match[1]}`);
+                        }
+                    });
+                }
+
+                if (defenseActions.length > 0) {
+                    defenseActions.forEach(card => {
+                        const match = card.text.match(/방어\s*(\d+)/);
+                        if (match) {
+                            actionParts.push(`방어 ${match[1]}`);
+                        }
+                    });
+                }
+
+                interpretation += `"<strong>${actionParts.join(' + ')}</strong>`;
+                if (modifiers.length > 0) {
+                    interpretation += ` (<strong>${modifiers.map(m => m.text).join(', ')}</strong>)`;
+                }
+                interpretation += `" <span style="color: #999;">→ 타겟 없음</span>`;
+                interpretation += '</div>';
+                return interpretation;
+            }
+
+            // 수식어만 있음
+            if (modifiers.length > 0 && actions.length === 0 && targets.length === 0) {
+                interpretation += `"<strong>${modifiers.map(m => m.text).join(', ')}</strong>!" <span style="color: #999;">→ 무의미한 행동</span>`;
+                interpretation += '</div>';
+                return interpretation;
+            }
+
+            // 정상 조합 (타겟 + 액션)
+            let targetText = '';
             if (targets.some(t => t.text.includes('적 전체') || t.text.includes('모두'))) {
                 targetText = '모든 적';
             } else if (targets.some(t => t.text.includes('적 1체'))) {
                 targetText = '적 1체';
+            } else {
+                targetText = '???';
             }
 
-            // 액션 해석
             let actionParts = [];
             actions.forEach(card => {
                 if (card.text.includes('피해')) {
@@ -420,22 +485,20 @@
                 } else if (card.text.includes('방어')) {
                     const match = card.text.match(/방어\s*(\d+)/);
                     if (match) {
-                        actionParts.push(`방어 ${match[1]} 획득`);
+                        actionParts.push(`방어 ${match[1]}`);
                     }
                 }
             });
 
-            // 수식어 해석
             let modifierText = '';
             if (modifiers.length > 0) {
-                modifierText = ' (' + modifiers.map(m => m.text).join(', ') + ')';
+                modifierText = ' (<strong>' + modifiers.map(m => m.text).join(', ') + '</strong>)';
             }
 
-            // 최종 문장 조합
             if (actionParts.length > 0) {
                 interpretation += `"<strong>${targetText}</strong>에게 <strong>${actionParts.join(' + ')}</strong>${modifierText}"`;
             } else {
-                interpretation += '<span style="color: #999;">실행 가능한 액션이 없습니다.</span>';
+                interpretation += '<span style="color: #999;">알 수 없는 조합</span>';
             }
 
             interpretation += '</div>';
@@ -446,72 +509,168 @@
         function executeCombat(tokens, damageBonus, repeatCount) {
             let combatLog = '<strong>⚔️ 전투 결과:</strong><br>';
 
-            // 토큰에서 타겟과 액션 분석
-            const hasTarget = tokens.some(t => t.type === 'target');
-            const damageCards = tokens.filter(t => t.text.includes('피해'));
+            // 토큰 분석
+            const targets = tokens.filter(t => t.type === 'target');
+            const actions = tokens.filter(t => t.type === 'action');
+            const modifiers = tokens.filter(t => t.type === 'modifier');
 
-            if (damageCards.length === 0) {
-                combatLog += '<span style="color: #999;">피해를 주는 카드가 없습니다.</span>';
+            const damageCards = actions.filter(t => t.text.includes('피해'));
+            const defenseCards = actions.filter(t => t.text.includes('방어'));
+
+            // === 경우 1: 토큰이 하나도 없음 (Cut으로 모두 잘림) ===
+            if (tokens.length === 0) {
+                combatLog += '<span style="color: #666;">💭 추론 실패... 아무 일도 일어나지 않았다.</span><br>';
                 return combatLog;
             }
 
-            // 기본 피해 계산
-            let baseDamage = 0;
-            damageCards.forEach(card => {
-                const match = card.text.match(/피해\s*(\d+)/);
-                if (match) {
-                    baseDamage += parseInt(match[1]);
-                }
-            });
+            // === 경우 2: 타겟만 있고 액션이 없음 ===
+            if (targets.length > 0 && actions.length === 0) {
+                const targetName = targets[0].text.includes('전체') ? '모든 적' : '적';
+                combatLog += `<span style="color: #999;">👁️ ${targetName}을(를) 노려보았다... 하지만 행동이 없어 아무 일도 일어나지 않았다.</span><br>`;
 
-            // 타겟 결정
-            let targetType = 'single'; // 기본: 단일
-            tokens.forEach(token => {
-                if (token.text.includes('적 전체') || token.text.includes('모두')) {
-                    targetType = 'all';
+                // 수식어가 있으면 언급
+                if (modifiers.length > 0) {
+                    combatLog += `<span style="color: #777;">(${modifiers.map(m => m.text).join(', ')}한 느낌이었다)</span><br>`;
                 }
-            });
-
-            // 보너스 설명
-            if (damageBonus > 1.0) {
-                combatLog += `<span style="color: #ff9a4a;">기본 피해 ${baseDamage} → Surge 보너스 적용 → ${Math.floor(baseDamage * damageBonus)} 피해</span><br>`;
-            } else if (repeatCount > 1) {
-                combatLog += `<span style="color: #4aff9a;">Perfect! 피해 ${baseDamage}를 ${repeatCount}회 실행</span><br>`;
-            } else {
-                combatLog += `<span style="color: #aaa;">피해: ${baseDamage}</span><br>`;
+                return combatLog;
             }
 
-            // 반복 실행
-            for (let i = 0; i < repeatCount; i++) {
-                if (repeatCount > 1) {
-                    combatLog += `<br>[${i + 1}회 실행]<br>`;
+            // === 경우 3: 액션만 있고 타겟이 없음 ===
+            if (actions.length > 0 && targets.length === 0) {
+                // 방어 카드가 있으면 자신에게 적용
+                if (defenseCards.length > 0) {
+                    let totalDefense = 0;
+                    defenseCards.forEach(card => {
+                        const match = card.text.match(/방어\s*(\d+)/);
+                        if (match) {
+                            totalDefense += parseInt(match[1]);
+                        }
+                    });
+
+                    totalDefense = Math.floor(totalDefense * damageBonus * repeatCount);
+                    gameState.playerShield += totalDefense;
+
+                    combatLog += `<span style="color: #4a9eff;">🛡️ 방어 태세! 방어력 +${totalDefense}</span><br>`;
+                    if (damageBonus > 1.0) {
+                        combatLog += `<span style="color: #ff9a4a;">(Surge 보너스 적용!)</span><br>`;
+                    }
+                    if (repeatCount > 1) {
+                        combatLog += `<span style="color: #4aff9a;">(Perfect! ${repeatCount}회 적용)</span><br>`;
+                    }
+                    return combatLog;
                 }
 
-                if (targetType === 'all') {
-                    // 전체 공격
-                    const aliveEnemies = gameState.enemies.filter(e => e.hp > 0);
-                    aliveEnemies.forEach(enemy => {
-                        const finalDamage = Math.floor(baseDamage * damageBonus);
-                        enemy.hp -= finalDamage;
-                        combatLog += `→ ${enemy.name}에게 ${finalDamage} 피해`;
-                        if (enemy.hp <= 0) {
-                            combatLog += ` 💀 <strong>처치!</strong>`;
+                // 피해 카드만 있으면 허공에 공격
+                if (damageCards.length > 0) {
+                    let totalDamage = 0;
+                    damageCards.forEach(card => {
+                        const match = card.text.match(/피해\s*(\d+)/);
+                        if (match) {
+                            totalDamage += parseInt(match[1]);
                         }
-                        combatLog += '<br>';
                     });
-                } else {
-                    // 단일 공격 (첫 번째 살아있는 적)
-                    const target = gameState.enemies.find(e => e.hp > 0);
-                    if (target) {
-                        const finalDamage = Math.floor(baseDamage * damageBonus);
-                        target.hp -= finalDamage;
-                        combatLog += `→ ${target.name}에게 ${finalDamage} 피해`;
-                        if (target.hp <= 0) {
-                            combatLog += ` 💀 <strong>처치!</strong>`;
+
+                    combatLog += `<span style="color: #999;">💨 타겟이 없어 허공을 공격했다! (피해 ${totalDamage}은(는) 허공으로 사라졌다)</span><br>`;
+
+                    // 운이 좋으면 첫 번째 적에게 1 피해
+                    if (Math.random() < 0.3) {
+                        const target = gameState.enemies.find(e => e.hp > 0);
+                        if (target) {
+                            target.hp -= 1;
+                            combatLog += `<span style="color: #ffaa4a;">✨ 운이 좋게도 ${target.name}에게 빗맞았다! (1 피해)</span><br>`;
                         }
-                        combatLog += '<br>';
+                    }
+                    return combatLog;
+                }
+            }
+
+            // === 경우 4: 수식어만 있음 ===
+            if (modifiers.length > 0 && actions.length === 0) {
+                const modifierEffects = [
+                    '멋진 포즈를 취했다!',
+                    '기세가 등등해졌다!',
+                    '적들이 조금 긴장한 것 같다.',
+                    '분위기가 바뀌었다... 하지만 실질적인 효과는 없다.'
+                ];
+                const randomEffect = modifierEffects[Math.floor(Math.random() * modifierEffects.length)];
+                combatLog += `<span style="color: #aa99ff;">🌟 ${modifiers.map(m => m.text).join(', ')}! ${randomEffect}</span><br>`;
+                return combatLog;
+            }
+
+            // === 경우 5: 정상적인 공격 (타겟 + 피해) ===
+            if (damageCards.length > 0) {
+                // 기본 피해 계산
+                let baseDamage = 0;
+                damageCards.forEach(card => {
+                    const match = card.text.match(/피해\s*(\d+)/);
+                    if (match) {
+                        baseDamage += parseInt(match[1]);
+                    }
+                });
+
+                // 타겟 결정
+                let targetType = 'single'; // 기본: 단일
+                if (targets.some(t => t.text.includes('적 전체') || t.text.includes('모두'))) {
+                    targetType = 'all';
+                }
+
+                // 보너스 설명
+                if (damageBonus > 1.0) {
+                    combatLog += `<span style="color: #ff9a4a;">기본 피해 ${baseDamage} → Surge 보너스 적용 → ${Math.floor(baseDamage * damageBonus)} 피해</span><br>`;
+                } else if (repeatCount > 1) {
+                    combatLog += `<span style="color: #4aff9a;">Perfect! 피해 ${baseDamage}를 ${repeatCount}회 실행</span><br>`;
+                } else {
+                    combatLog += `<span style="color: #aaa;">피해: ${baseDamage}</span><br>`;
+                }
+
+                // 반복 실행
+                for (let i = 0; i < repeatCount; i++) {
+                    if (repeatCount > 1) {
+                        combatLog += `<br>[${i + 1}회 실행]<br>`;
+                    }
+
+                    if (targetType === 'all') {
+                        // 전체 공격
+                        const aliveEnemies = gameState.enemies.filter(e => e.hp > 0);
+                        aliveEnemies.forEach(enemy => {
+                            const finalDamage = Math.floor(baseDamage * damageBonus);
+                            enemy.hp -= finalDamage;
+                            combatLog += `→ ${enemy.name}에게 ${finalDamage} 피해`;
+                            if (enemy.hp <= 0) {
+                                combatLog += ` 💀 <strong>처치!</strong>`;
+                            }
+                            combatLog += '<br>';
+                        });
+                    } else {
+                        // 단일 공격 (첫 번째 살아있는 적)
+                        const target = gameState.enemies.find(e => e.hp > 0);
+                        if (target) {
+                            const finalDamage = Math.floor(baseDamage * damageBonus);
+                            target.hp -= finalDamage;
+                            combatLog += `→ ${target.name}에게 ${finalDamage} 피해`;
+                            if (target.hp <= 0) {
+                                combatLog += ` 💀 <strong>처치!</strong>`;
+                            }
+                            combatLog += '<br>';
+                        }
                     }
                 }
+            }
+
+            // 방어 카드 처리 (피해와 함께 사용된 경우)
+            if (defenseCards.length > 0) {
+                let totalDefense = 0;
+                defenseCards.forEach(card => {
+                    const match = card.text.match(/방어\s*(\d+)/);
+                    if (match) {
+                        totalDefense += parseInt(match[1]);
+                    }
+                });
+
+                totalDefense = Math.floor(totalDefense * damageBonus * repeatCount);
+                gameState.playerShield += totalDefense;
+
+                combatLog += `<br><span style="color: #4a9eff;">🛡️ 방어력 +${totalDefense}</span><br>`;
             }
 
             // 승리 조건 체크
